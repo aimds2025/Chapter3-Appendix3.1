@@ -366,6 +366,264 @@ install)</h3>
 <div class="sourceCode" id="cb4"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> data/generate_synthetic.py     <span class="co"># writes the multi-hospital cohort</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> tests/run_all.py                <span class="co"># runs all 4 suites in one shot</span></span></code></pre></div>
 <p>Expected tail: <code>ALL SUITES OK</code>.</p>
+<h3 id="whats-coded-vs.-what-needs-external-tools">3.4 What’s coded
+vs. what needs external tools</h3>
+<p><strong>You do not need Kafka, Flink, InfluxDB, Redis, PostgreSQL, an
+identity provider, or a service mesh to run or test this
+package.</strong> Every layer’s <em>behaviour</em> is implemented in
+pure Python, so <code>pip install -e .</code> (numpy) runs the whole
+thing end-to-end. Each item below is one of: <strong>✅ real working
+code</strong> · <strong>🔶 in-process stand-in</strong> for the named
+product · <strong>⚠️ modeled in shape</strong> (not a real
+implementation).</p>
+<table>
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Feature</th>
+<th>Status</th>
+<th>Module</th>
+<th>Runs on numpy alone?</th>
+<th>Real product needed to run?</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Edge gateway (QRS, SQI, DWT, attestation)</td>
+<td>✅ real code</td>
+<td><code>layer1_edge/</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="even">
+<td>mTLS 1.3</td>
+<td>⚠️ modeled</td>
+<td><code>layer2_perimeter/</code></td>
+<td>✅</td>
+<td>No (real mTLS = service mesh, production)</td>
+</tr>
+<tr class="odd">
+<td>Identity-aware proxy</td>
+<td>⚠️ modeled</td>
+<td><code>layer2_perimeter/</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="even">
+<td>Network segmentation, PHI/ML/Admin zones</td>
+<td>✅ coded</td>
+<td><code>layer2_perimeter/</code> +
+<code>crosscutting/iam.py</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="odd">
+<td>RBAC</td>
+<td>✅ real code</td>
+<td><code>crosscutting/iam.py</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="even">
+<td>SSO, MFA</td>
+<td>⚠️ modeled</td>
+<td><code>crosscutting/iam.py</code> (workforce narrative)</td>
+<td>✅</td>
+<td>Real IdP, production</td>
+</tr>
+<tr class="odd">
+<td>Apache Kafka</td>
+<td>🔶 stand-in</td>
+<td><code>layer3_ingestion/</code></td>
+<td>✅</td>
+<td>No (optional real: <code>confluent-kafka</code>)</td>
+</tr>
+<tr class="even">
+<td>mTLS auth</td>
+<td>⚠️ modeled</td>
+<td><code>layer2_perimeter/</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="odd">
+<td>Apache Flink (stream processing)</td>
+<td>🔶 stand-in</td>
+<td><code>layer4_processing/</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="even">
+<td><strong>Sieve-streaming coreset</strong></td>
+<td>✅ <strong>real algorithm</strong></td>
+<td><code>layer4_processing/</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="odd">
+<td>Data quality / validation</td>
+<td>✅ real code</td>
+<td><code>layer4_processing/</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="even">
+<td>Sieve-streaming validation (online, P² quantiles)</td>
+<td>✅ real code</td>
+<td><code>streaming/</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="odd">
+<td>InfluxDB (time-series)</td>
+<td>🔶 stand-in (<code>TSDB</code>)</td>
+<td><code>layer5_storage/</code></td>
+<td>✅</td>
+<td>No (optional real: <code>influxdb-client</code>)</td>
+</tr>
+<tr class="even">
+<td>Redis (feature store)</td>
+<td>🔶 stand-in (<code>FeatureStore</code>)</td>
+<td><code>layer5_storage/</code></td>
+<td>✅</td>
+<td>No (optional real: <code>redis</code>)</td>
+</tr>
+<tr class="odd">
+<td>PostgreSQL (metadata)</td>
+<td>🔶 stand-in (<code>MetadataStore</code>)</td>
+<td><code>layer5_storage/</code></td>
+<td>✅</td>
+<td>No (optional real: <code>psycopg</code>)</td>
+</tr>
+<tr class="even">
+<td>MCP Gateway</td>
+<td>✅ real code</td>
+<td><code>layer6_mcp_gateway/</code> + <code>mcp_platform/</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+<tr class="odd">
+<td>Batch pipeline (DP-SGD, SBOM)</td>
+<td>✅ real code</td>
+<td><code>layer7_training/</code></td>
+<td>✅</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<h3 id="mcp-platform-coded-optional-install-or-production-only">3.5 MCP
+platform — coded, optional install, or production-only?</h3>
+<p>The agentic multi-tenant platform (<code>mcp_platform/</code>) is
+fully coded and runs on numpy alone. The only things that require more
+are the <em>real</em> MCP transport (one optional
+<code>pip install</code>) and the external identity/infra a production
+deployment would supply. Legend: <strong>✅ coded</strong> (numpy only)
+· <strong>📦 optional pip install</strong> · <strong>⚙️ production
+infra/service</strong> (not needed to run or test locally).</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>MCP platform capability</th>
+<th>Status</th>
+<th>How to run / notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Multi-tenant platform facade (<code>MultiTenantPlatform</code>)</td>
+<td>✅ coded</td>
+<td><code>examples/run_mcp_platform.py</code></td>
+</tr>
+<tr class="even">
+<td>Per-tenant isolated stores (tenancy)</td>
+<td>✅ coded</td>
+<td>one in-process <code>StorageLayer</code> per hospital</td>
+</tr>
+<tr class="odd">
+<td>ML-project principals + RBAC scopes
+(<code>PrincipalRegistry</code>)</td>
+<td>✅ coded</td>
+<td>deny-by-default grants</td>
+</tr>
+<tr class="even">
+<td>Tiered access (DP-aggregate / feature / raw) + tool registry</td>
+<td>✅ coded</td>
+<td><code>access.py</code></td>
+</tr>
+<tr class="odd">
+<td>Gateway middleware (authN, scope+tenant authZ, prompt firewall,
+HITL, PHI scrub, HMAC, audit)</td>
+<td>✅ coded</td>
+<td><code>gateway.py</code></td>
+</tr>
+<tr class="even">
+<td>Data-plane tools (<code>query_vitals_dp</code>,
+<code>get_feature_batch</code>, <code>get_coreset</code>,
+<code>request_raw_access</code>, <code>trigger_retraining</code>)</td>
+<td>✅ coded</td>
+<td><code>handlers.py</code></td>
+</tr>
+<tr class="odd">
+<td>Admin/IAM tools (<code>grant_access</code>, <code>set_budget</code>,
+<code>list_principals</code>)</td>
+<td>✅ coded</td>
+<td>scope-gated admin surface</td>
+</tr>
+<tr class="even">
+<td>Per-(project × tenant) DP budget ledger</td>
+<td>✅ coded</td>
+<td><code>TenantPrivacyLedger</code></td>
+</tr>
+<tr class="odd">
+<td>OAuth 2.1 token validation</td>
+<td>⚠️ modeled (stub <code>Bearer</code> check)</td>
+<td>real validation = OAuth AS (production)</td>
+</tr>
+<tr class="even">
+<td>Real MCP server over <strong>stdio</strong>
+(<code>server.py</code>)</td>
+<td>📦 optional install</td>
+<td><code>pip install -e &quot;.[mcp]&quot;</code> →
+<code>python -m physio_pipeline.mcp_platform.server</code></td>
+</tr>
+<tr class="odd">
+<td>Streamable HTTP transport (remote MCP)</td>
+<td>⚙️ production</td>
+<td>SDK/hosting provides it; the stdio adapter is local-only</td>
+</tr>
+<tr class="even">
+<td>MCP client / LLM agent (the caller)</td>
+<td>⚙️ production</td>
+<td>an external MCP host/agent connects to the server</td>
+</tr>
+<tr class="odd">
+<td>OAuth 2.1 Authorization Server (issues scoped tokens)</td>
+<td>⚙️ production</td>
+<td>external identity service</td>
+</tr>
+<tr class="even">
+<td>Physical/schema tenant isolation + data residency</td>
+<td>⚙️ production</td>
+<td>in-repo isolation is logical (separate in-process stores)</td>
+</tr>
+<tr class="odd">
+<td>Rényi-DP composition accounting</td>
+<td>⚙️ production</td>
+<td>basic sequential composition coded; RDP is the production
+upgrade</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="quickstart">4. Quickstart</h2>
 <div class="sourceCode" id="cb5"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> examples/run_layers_verbose.py       <span class="co"># see EACH layer&#39;s output, L1→L8</span></span>
