@@ -1,3 +1,29 @@
+Metadata-Version: 2.4
+Name: physio-pipeline
+Version: 0.2.0
+Summary: 8-layer reference architecture for a secure, privacy-preserving physiological time-series pipeline, with an agentic multi-tenant MCP access platform.
+Author: AVS / physio_pipeline
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.24
+Provides-Extra: prod
+Requires-Dist: confluent-kafka; extra == "prod"
+Requires-Dist: influxdb-client; extra == "prod"
+Requires-Dist: redis; extra == "prod"
+Requires-Dist: psycopg[binary]; extra == "prod"
+Requires-Dist: boto3; extra == "prod"
+Requires-Dist: torch; extra == "prod"
+Requires-Dist: opacus; extra == "prod"
+Requires-Dist: mlflow; extra == "prod"
+Requires-Dist: opentelemetry-sdk; extra == "prod"
+Provides-Extra: mcp
+Requires-Dist: mcp>=1.0; extra == "mcp"
+Provides-Extra: dev
+Requires-Dist: pytest>=7; extra == "dev"
+Dynamic: license-file
+
 # physio_pipeline
 
 A **runnable 8-layer reference architecture** for a secure, privacy-preserving
@@ -166,7 +192,7 @@ would supply. Legend: **✅ coded** (numpy only) · **📦 optional pip install*
 | Admin/IAM tools (`grant_access`, `set_budget`, `list_principals`) | ✅ coded | scope-gated admin surface |
 | Per-(project × tenant) DP budget ledger | ✅ coded | `TenantPrivacyLedger` |
 | OAuth 2.1 token validation | ⚠️ modeled (stub `Bearer` check) | real validation = OAuth AS (production) |
-| Real MCP server over **stdio** (`server.py`, mcp ≥2.0 or 1.x) | 📦 optional install | `pip install -e ".[mcp]"` → `... server --selftest` to verify, then `... server` |
+| Real MCP server over **stdio** (`server.py`) | 📦 optional install | `pip install -e ".[mcp]"` → `python -m physio_pipeline.mcp_platform.server` |
 | Streamable HTTP transport (remote MCP) | ⚙️ production | SDK/hosting provides it; the stdio adapter is local-only |
 | MCP client / LLM agent (the caller) | ⚙️ production | an external MCP host/agent connects to the server |
 | OAuth 2.1 Authorization Server (issues scoped tokens) | ⚙️ production | external identity service |
@@ -395,17 +421,10 @@ print(out["result"])          # noised aggregate; signed; budget debited
 **Real MCP server (optional).** With `pip install -e ".[mcp]"`:
 
 ```bash
-# verify it works without needing an MCP client:
-python -m physio_pipeline.mcp_platform.server --selftest
-
-# run it for a real client (waits silently on stdio; Ctrl+C to stop):
-python -m physio_pipeline.mcp_platform.server
+python -m physio_pipeline.mcp_platform.server      # stdio transport
 ```
 
-Supports both the current **mcp >= 2.0** SDK (`MCPServer`) and legacy 1.x
-(`FastMCP`). The `--selftest` flag builds the server, confirms the tools
-registered, and runs one governed call — use it to check your install without
-wiring up a client. An MCP client (an LLM agent / host) can then discover and call
+An MCP client (an LLM agent / host) can then discover and call
 `query_vitals_dp`, `get_feature_batch`, and `request_raw_access`. The same
 gateway checks apply. (For a runnable reference without an OAuth server,
 principal/tenant are passed as tool arguments; in production they come from the

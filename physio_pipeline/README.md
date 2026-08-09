@@ -118,6 +118,62 @@ python tests/run_all.py                # runs all 4 suites in one shot
 
 Expected tail: `ALL SUITES OK`.
 
+### 3.4 What's coded vs. what needs external tools
+
+**You do not need Kafka, Flink, InfluxDB, Redis, PostgreSQL, an identity
+provider, or a service mesh to run or test this package.** Every layer's
+*behaviour* is implemented in pure Python, so `pip install -e .` (numpy) runs
+the whole thing end-to-end. Each item below is one of:
+**✅ real working code** · **🔶 in-process stand-in** for the named product ·
+**⚠️ modeled in shape** (not a real implementation).
+
+| Feature | Status | Module | Runs on numpy alone? | Real product needed to run? |
+|---|---|---|---|---|
+| Edge gateway (QRS, SQI, DWT, attestation) | ✅ real code | `layer1_edge/` | ✅ | No |
+| mTLS 1.3 | ⚠️ modeled | `layer2_perimeter/` | ✅ | No (real mTLS = service mesh, production) |
+| Identity-aware proxy | ⚠️ modeled | `layer2_perimeter/` | ✅ | No |
+| Network segmentation, PHI/ML/Admin zones | ✅ coded | `layer2_perimeter/` + `crosscutting/iam.py` | ✅ | No |
+| RBAC | ✅ real code | `crosscutting/iam.py` | ✅ | No |
+| SSO, MFA | ⚠️ modeled | `crosscutting/iam.py` (workforce narrative) | ✅ | Real IdP, production |
+| Apache Kafka | 🔶 stand-in | `layer3_ingestion/` | ✅ | No (optional real: `confluent-kafka`) |
+| mTLS auth | ⚠️ modeled | `layer2_perimeter/` | ✅ | No |
+| Apache Flink (stream processing) | 🔶 stand-in | `layer4_processing/` | ✅ | No |
+| **Sieve-streaming coreset** | ✅ **real algorithm** | `layer4_processing/` | ✅ | No |
+| Data quality / validation | ✅ real code | `layer4_processing/` | ✅ | No |
+| Sieve-streaming validation (online, P² quantiles) | ✅ real code | `streaming/` | ✅ | No |
+| InfluxDB (time-series) | 🔶 stand-in (`TSDB`) | `layer5_storage/` | ✅ | No (optional real: `influxdb-client`) |
+| Redis (feature store) | 🔶 stand-in (`FeatureStore`) | `layer5_storage/` | ✅ | No (optional real: `redis`) |
+| PostgreSQL (metadata) | 🔶 stand-in (`MetadataStore`) | `layer5_storage/` | ✅ | No (optional real: `psycopg`) |
+| MCP Gateway | ✅ real code | `layer6_mcp_gateway/` + `mcp_platform/` | ✅ | No |
+| Batch pipeline (DP-SGD, SBOM) | ✅ real code | `layer7_training/` | ✅ | No |
+
+### 3.5 MCP platform — coded, optional install, or production-only?
+
+The agentic multi-tenant platform (`mcp_platform/`) is fully coded and runs on
+numpy alone. The only things that require more are the *real* MCP transport (one
+optional `pip install`) and the external identity/infra a production deployment
+would supply. Legend: **✅ coded** (numpy only) · **📦 optional pip install** ·
+**⚙️ production infra/service** (not needed to run or test locally).
+
+| MCP platform capability | Status | How to run / notes |
+|---|---|---|
+| Multi-tenant platform facade (`MultiTenantPlatform`) | ✅ coded | `examples/run_mcp_platform.py` |
+| Per-tenant isolated stores (tenancy) | ✅ coded | one in-process `StorageLayer` per hospital |
+| ML-project principals + RBAC scopes (`PrincipalRegistry`) | ✅ coded | deny-by-default grants |
+| Tiered access (DP-aggregate / feature / raw) + tool registry | ✅ coded | `access.py` |
+| Gateway middleware (authN, scope+tenant authZ, prompt firewall, HITL, PHI scrub, HMAC, audit) | ✅ coded | `gateway.py` |
+| Data-plane tools (`query_vitals_dp`, `get_feature_batch`, `get_coreset`, `request_raw_access`, `trigger_retraining`) | ✅ coded | `handlers.py` |
+| Admin/IAM tools (`grant_access`, `set_budget`, `list_principals`) | ✅ coded | scope-gated admin surface |
+| Per-(project × tenant) DP budget ledger | ✅ coded | `TenantPrivacyLedger` |
+| OAuth 2.1 token validation | ⚠️ modeled (stub `Bearer` check) | real validation = OAuth AS (production) |
+| Real MCP server over **stdio** (`server.py`, mcp ≥2.0 or 1.x) | 📦 optional install | `pip install -e ".[mcp]"` → `... server --selftest` to verify, then `... server` |
+| Streamable HTTP transport (remote MCP) | ⚙️ production | SDK/hosting provides it; the stdio adapter is local-only |
+| MCP client / LLM agent (the caller) | ⚙️ production | an external MCP host/agent connects to the server |
+| OAuth 2.1 Authorization Server (issues scoped tokens) | ⚙️ production | external identity service |
+| Physical/schema tenant isolation + data residency | ⚙️ production | in-repo isolation is logical (separate in-process stores) |
+| Rényi-DP composition accounting | ⚙️ production | basic sequential composition coded; RDP is the production upgrade |
+
+
 ---
 
 ## 4. Quickstart
@@ -339,10 +395,17 @@ print(out["result"])          # noised aggregate; signed; budget debited
 **Real MCP server (optional).** With `pip install -e ".[mcp]"`:
 
 ```bash
-python -m physio_pipeline.mcp_platform.server      # stdio transport
+# verify it works without needing an MCP client:
+python -m physio_pipeline.mcp_platform.server --selftest
+
+# run it for a real client (waits silently on stdio; Ctrl+C to stop):
+python -m physio_pipeline.mcp_platform.server
 ```
 
-An MCP client (an LLM agent / host) can then discover and call
+Supports both the current **mcp >= 2.0** SDK (`MCPServer`) and legacy 1.x
+(`FastMCP`). The `--selftest` flag builds the server, confirms the tools
+registered, and runs one governed call — use it to check your install without
+wiring up a client. An MCP client (an LLM agent / host) can then discover and call
 `query_vitals_dp`, `get_feature_batch`, and `request_raw_access`. The same
 gateway checks apply. (For a runnable reference without an OAuth server,
 principal/tenant are passed as tool arguments; in production they come from the
