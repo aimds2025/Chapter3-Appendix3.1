@@ -1,0 +1,11 @@
+patient_id,device_id,hospital_id,cohort,fs_hz,n_channels,n_samples,seconds,hr_true_bpm,expected_behaviour,seed
+P001,MON-P001,H001,normal,250,3,15000,60.0,79.5,healthy sinus rhythm,1001
+P002,MON-P002,H002,normal,250,3,15000,60.0,70.2,healthy sinus rhythm,1002
+P003,MON-P003,H003,tachycardia,250,3,15000,60.0,137.5,sustained tachycardia -> critical alarm,1003
+P004,MON-P004,H001,tachycardia,250,3,15000,60.0,130.0,sustained tachycardia -> critical alarm,1004
+P005,MON-P005,H002,bradycardia,250,3,15000,60.0,31.0,sustained bradycardia -> critical alarm,1005
+P006,MON-P006,H003,bradycardia,250,3,15000,60.0,34.0,sustained bradycardia -> critical alarm,1006
+P007,MON-P007,H001,signal_loss,250,3,15000,60.0,61.4,"heavy noise -> low SQI, DQ gap",1007
+P008,MON-P008,H002,signal_loss,250,3,15000,60.0,63.3,"heavy noise -> low SQI, DQ gap",1008
+P009,MON-P009,H003,poisoned,250,3,15000,60.0,61.1,adversarial outlier -> coreset guard veto,1009
+P010,MON-P010,H001,poisoned,250,3,15000,60.0,61.9,adversarial outlier -> coreset guard veto,1010

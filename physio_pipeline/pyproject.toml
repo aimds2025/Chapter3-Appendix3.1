@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "physio-pipeline"
+version = "0.2.0"
+description = "8-layer reference architecture for a secure, privacy-preserving physiological time-series pipeline, with an agentic multi-tenant MCP access platform."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "AVS / physio_pipeline" }]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+# Production swap-ins referenced in the tier docstrings (not required for the demo):
+prod = [
+    "confluent-kafka",   # Layer 3 ingestion (Kafka)
+    "influxdb-client",   # Layer 5 time-series store (InfluxDB)
+    "redis",             # Layer 5 online feature store (Redis)
+    "psycopg[binary]",   # Layer 5 metadata store (PostgreSQL)
+    "boto3",             # Layer 5 object lake / S3 Object Lock
+    "torch", "opacus",   # Layer 7 DP-SGD
+    "mlflow",            # Layer 7 experiment tracking
+    "opentelemetry-sdk", # cross-cutting tracing
+]
+mcp = ["mcp>=1.0"]       # optional real MCP server adapter (mcp_platform/server.py)
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["physio_pipeline*"]

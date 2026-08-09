@@ -1,0 +1,8 @@
+# --- Runtime (required) ---
+numpy>=1.24
+
+# --- Optional: real MCP server adapter (physio_pipeline/mcp_platform/server.py) ---
+# pip install mcp        # or:  pip install "physio-pipeline[mcp]"
+
+# --- Optional: test runner (the suites also run standalone without it) ---
+# pip install pytest     # or:  pip install "physio-pipeline[dev]"
