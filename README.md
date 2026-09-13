@@ -1,0 +1,550 @@
+# physio_pipeline
+
+A **runnable 8-layer reference architecture** for a secure, privacy-preserving
+pipeline over high-frequency (250 Hz) physiological time-series data, plus an
+**agentic multi-tenant access platform** that fronts it with the Model Context
+Protocol (MCP).
+
+Every layer in the architecture diagrams below is implemented as its own Python
+subpackage, with one explicit data contract crossing each boundary. The core
+runs on **numpy only**, end-to-end, on synthetic data — so you can install it in
+one step and test every layer without any external services.
+
+> **Scope.** This is architecture scaffolding for design, review, and
+> prototyping — **not** a validated medical device. Signal processing, DP
+> accounting, and security controls are faithful in *shape* but simplified; the
+> production technology each stub stands in for is listed per layer and in the
+> swap-in map. Everything here is **unit-tested, not formally verified.**
+
+---
+
+## 1. Architecture
+
+The three diagrams below are the contract this package implements. They are
+included under `docs/architecture/`.
+
+### Layers 1–5 — edge to storage
+![Layers 1-5](docs/architecture/layers_1-5.png)
+
+### Layers 6–8 + cross-cutting — MCP gateway, training, governance
+![Layers 6-8](docs/architecture/layers_6-8_crosscutting.png)
+
+### Agentic multi-tenant access platform (MCP)
+![Agentic multi-tenant platform](docs/architecture/agentic_multitenant_platform.png)
+
+Primary data flow (one contract per boundary, all defined in
+`core/contracts.py`):
+
+```
+WaveformFrame → EdgePacket → StreamRecord → ProcessedBatch → StorageReceipt
+                                          ↘ ModelArtifact → ComplianceReport
+```
+
+The multi-tenant platform wraps Layers 5/6: ML-project agents call MCP tools
+that read the **per-tenant** stores through a gateway that enforces scope,
+tenant isolation, and per-(project × tenant) differential-privacy budgets.
+
+---
+
+## 2. What's in the box
+
+```
+physio_pipeline_pkg/
+├── README.md                     ← this file
+├── requirements.txt              ← numpy (+ optional extras, commented)
+├── pyproject.toml                ← editable install + [prod] / [mcp] / [dev] extras
+├── docs/architecture/            ← the 3 architecture diagrams
+├── physio_pipeline/
+│   ├── core/                     ← data contracts + exceptions (the layer interfaces)
+│   ├── crosscutting/             ← IAM/RBAC, audit/SIEM, DP budget ledgers, tracing
+│   ├── layer1_edge/              ← L1  device / bedside  (edge gateway)
+│   ├── layer2_perimeter/         ← L2  zero-trust perimeter
+│   ├── layer3_ingestion/         ← L3  stream ingestion (Kafka-style)
+│   ├── layer4_processing/        ← L4  stream processing (Flink-style) + Sieve coreset
+│   ├── layer5_storage/           ← L5  multi-layered storage (InfluxDB/Redis/PostgreSQL/S3/DP)
+│   ├── layer6_mcp_gateway/       ← L6  MCP security gateway
+│   ├── layer7_training/          ← L7  batch ML training (DP-SGD)
+│   ├── layer8_governance/        ← L8  governance & compliance
+│   ├── streaming/                ← continuous, time-paced simulation harness
+│   ├── mcp_platform/             ← agentic multi-tenant MCP access platform
+│   └── pipeline.py               ← orchestrator wiring L1→L8
+├── data/generate_synthetic.py    ← reproducible multi-hospital cohort generator
+├── examples/                     ← 6 runnable demos (see §7)
+└── tests/                        ← 4 unit-test suites + run_all.py (see §8)
+```
+
+---
+
+## 3. Installation & tools
+
+Requires **Python 3.10+**. Works on macOS, Linux, and Windows.
+
+### 3.1 Minimal (everything in this README works with just this)
+
+```bash
+# 1. unzip and enter the folder
+cd physio_pipeline_pkg
+
+# 2. create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate          # macOS / Linux
+# .venv\Scripts\activate           # Windows (PowerShell)
+
+# 3. install the one runtime dependency (numpy) as an editable package
+pip install -e .
+```
+
+`pip install -e .` makes `import physio_pipeline` resolve from anywhere in the
+project, which the examples and tests rely on. It pulls in **numpy** only.
+
+### 3.2 Optional tools
+
+| You want to… | Install | Then |
+|---|---|---|
+| Run the test suites with `pytest` | `pip install -e ".[dev]"` | `pytest -q` |
+| Run the **real MCP server** (stdio) | `pip install -e ".[mcp]"` | `python -m physio_pipeline.mcp_platform.server` |
+| Wire in real production backends | `pip install -e ".[prod]"` | see the swap-in map (§9) |
+
+The test suites also run **without pytest** (they ship a fallback runner), so
+`[dev]` is optional. `[mcp]` is only needed for the real MCP-SDK server;
+everything else, including the full agentic platform demo, runs in-process.
+
+### 3.3 First run (verify the install)
+
+```bash
+python data/generate_synthetic.py     # writes the multi-hospital cohort
+python tests/run_all.py                # runs all 4 suites in one shot
+```
+
+Expected tail: `ALL SUITES OK`.
+
+### 3.4 What's coded vs. what needs external tools
+
+**You do not need Kafka, Flink, InfluxDB, Redis, PostgreSQL, an identity
+provider, or a service mesh to run or test this package.** Every layer's
+*behaviour* is implemented in pure Python, so `pip install -e .` (numpy) runs
+the whole thing end-to-end. Each item below is one of:
+**✅ real working code** · **🔶 in-process stand-in** for the named product ·
+**⚠️ modeled in shape** (not a real implementation).
+
+| Feature | Status | Module | Runs on numpy alone? | Real product needed to run? |
+|---|---|---|---|---|
+| Edge gateway (QRS, SQI, DWT, attestation) | ✅ real code | `layer1_edge/` | ✅ | No |
+| mTLS 1.3 | ⚠️ modeled | `layer2_perimeter/` | ✅ | No (real mTLS = service mesh, production) |
+| Identity-aware proxy | ⚠️ modeled | `layer2_perimeter/` | ✅ | No |
+| Network segmentation, PHI/ML/Admin zones | ✅ coded | `layer2_perimeter/` + `crosscutting/iam.py` | ✅ | No |
+| RBAC | ✅ real code | `crosscutting/iam.py` | ✅ | No |
+| SSO, MFA | ⚠️ modeled | `crosscutting/iam.py` (workforce narrative) | ✅ | Real IdP, production |
+| Apache Kafka | 🔶 stand-in | `layer3_ingestion/` | ✅ | No (optional real: `confluent-kafka`) |
+| mTLS auth | ⚠️ modeled | `layer2_perimeter/` | ✅ | No |
+| Apache Flink (stream processing) | 🔶 stand-in | `layer4_processing/` | ✅ | No |
+| **Sieve-streaming coreset** | ✅ **real algorithm** | `layer4_processing/` | ✅ | No |
+| Data quality / validation | ✅ real code | `layer4_processing/` | ✅ | No |
+| Sieve-streaming validation (online, P² quantiles) | ✅ real code | `streaming/` | ✅ | No |
+| InfluxDB (time-series) | 🔶 stand-in (`TSDB`) | `layer5_storage/` | ✅ | No (optional real: `influxdb-client`) |
+| Redis (feature store) | 🔶 stand-in (`FeatureStore`) | `layer5_storage/` | ✅ | No (optional real: `redis`) |
+| PostgreSQL (metadata) | 🔶 stand-in (`MetadataStore`) | `layer5_storage/` | ✅ | No (optional real: `psycopg`) |
+| MCP Gateway | ✅ real code | `layer6_mcp_gateway/` + `mcp_platform/` | ✅ | No |
+| Batch pipeline (DP-SGD, SBOM) | ✅ real code | `layer7_training/` | ✅ | No |
+
+### 3.5 MCP platform — coded, optional install, or production-only?
+
+The agentic multi-tenant platform (`mcp_platform/`) is fully coded and runs on
+numpy alone. The only things that require more are the *real* MCP transport (one
+optional `pip install`) and the external identity/infra a production deployment
+would supply. Legend: **✅ coded** (numpy only) · **📦 optional pip install** ·
+**⚙️ production infra/service** (not needed to run or test locally).
+
+| MCP platform capability | Status | How to run / notes |
+|---|---|---|
+| Multi-tenant platform facade (`MultiTenantPlatform`) | ✅ coded | `examples/run_mcp_platform.py` |
+| Per-tenant isolated stores (tenancy) | ✅ coded | one in-process `StorageLayer` per hospital |
+| ML-project principals + RBAC scopes (`PrincipalRegistry`) | ✅ coded | deny-by-default grants |
+| Tiered access (DP-aggregate / feature / raw) + tool registry | ✅ coded | `access.py` |
+| Gateway middleware (authN, scope+tenant authZ, prompt firewall, HITL, PHI scrub, HMAC, audit) | ✅ coded | `gateway.py` |
+| Data-plane tools (`query_vitals_dp`, `get_feature_batch`, `get_coreset`, `request_raw_access`, `trigger_retraining`) | ✅ coded | `handlers.py` |
+| Admin/IAM tools (`grant_access`, `set_budget`, `list_principals`) | ✅ coded | scope-gated admin surface |
+| Per-(project × tenant) DP budget ledger | ✅ coded | `TenantPrivacyLedger` |
+| OAuth 2.1 token validation | ⚠️ modeled (stub `Bearer` check) | real validation = OAuth AS (production) |
+| Real MCP server over **stdio** (`server.py`, mcp ≥2.0 or 1.x) | 📦 optional install | `pip install -e ".[mcp]"` → `... server --selftest` to verify, then `... server` |
+| Streamable HTTP transport (remote MCP) | ⚙️ production | SDK/hosting provides it; the stdio adapter is local-only |
+| MCP client / LLM agent (the caller) | ⚙️ production | an external MCP host/agent connects to the server |
+| OAuth 2.1 Authorization Server (issues scoped tokens) | ⚙️ production | external identity service |
+| Physical/schema tenant isolation + data residency | ⚙️ production | in-repo isolation is logical (separate in-process stores) |
+| Rényi-DP composition accounting | ⚙️ production | basic sequential composition coded; RDP is the production upgrade |
+
+
+---
+
+## 4. Quickstart
+
+```bash
+python examples/run_layers_verbose.py       # see EACH layer's output, L1→L8
+python examples/run_mcp_platform.py         # the agentic multi-tenant platform
+python examples/run_streaming_multitenant.py# multi-hospital streaming + MCP queries
+python tests/run_all.py                     # test everything
+```
+
+Minimal library use:
+
+```python
+from physio_pipeline import PhysioPipeline, EdgeDevice
+
+pipe = PhysioPipeline()
+devices = [EdgeDevice("P001", "MON-A"), EdgeDevice("P002", "MON-B")]
+result = pipe.run_batch(devices, windows_per_device=5)
+print(result.batch.alarms, result.receipt.raw_sha256, result.compliance.controls)
+```
+
+---
+
+## 5. Layer-by-layer guide
+
+For each layer: what it implements, the module, the key classes, and how to run
+or test it. The "diagram features" column names the boxes in §1 it realizes.
+
+### Layer 1 — Edge (device / bedside) · `layer1_edge/`
+Diagram features: 250 Hz medical device, Linux-MCU **edge gateway**,
+Pan–Tompkins QRS, SQI tagging, DWT compression + PRD, 60 s ring buffer, secure
+boot / signed firmware / **TPM device attestation**.
+
+- **`EdgeDevice`** — acquires a multi-channel window (`WaveformFrame`), runs
+  simplified Pan–Tompkins QRS detection, computes SQI, DWT-compresses the
+  payload (with PRD), keeps a 60 s ring buffer, and emits an attested
+  `EdgePacket`. The raw waveform never leaves the device.
+- **`ReplayDevice`** — a drop-in device that replays recorded waveforms from
+  disk (`.npz`), carrying the `hospital_id` tenant tag. This is the seam where a
+  real WFDB/EDF recording plugs in.
+
+Run/test: `python examples/run_layers_verbose.py` (see the `EdgePacket`);
+covered by `tests/test_smoke.py` and `tests/test_synthetic_cohorts.py`.
+
+### Layer 2 — Zero-trust perimeter · `layer2_perimeter/`
+Diagram features: **mTLS 1.3** service-to-service, **identity-aware proxy**
+(BeyondCorp / IAP / Verified Access), **network segmentation** (PHI / ML / Admin
+zones), **DLP** proxy on outbound MCP, per-request authZ.
+
+- **`ZeroTrustPerimeter`** — verifies the device's workload identity via the
+  cross-cutting IAM (SPIFFE-style), evaluates an OPA-style attestation policy,
+  assigns the packet to a **network zone** (waveforms → PHI zone), and runs a
+  **DLP** scan on outbound metadata before admitting the packet.
+
+Run/test: exercised in every pipeline run; `tests/test_smoke.py`
+(`test_perimeter_rejects_bad_attestation`).
+
+### Layer 3 — Stream ingestion · `layer3_ingestion/`
+Diagram features: **Apache Kafka** (partitions, RF, min-ISR), Avro + **schema
+registry**, topics `vitals.waveform.v2` / `.alarms` / `.features`,
+**SASL/mTLS auth**, topic ACLs, 7-day replay, AES-256 at rest.
+
+- **`StreamIngestion`** — a partitioned append-only log (Kafka stand-in) keyed
+  by `patient_id`, with a `SchemaRegistry` that validates schema versions and a
+  `replay(from_offset)` window. Refuses unauthorized packets.
+
+Run/test: every run; `tests/test_smoke.py`.
+
+### Layer 4 — Stream processing (Apache Flink) · `layer4_processing/`
+Diagram features: real-time **anomaly detection** (10 s window → alarms),
+**Sieve-Streaming coreset** with a facility-location objective, **data
+quality / validation** (SQI range, gaps → DQ metrics), **coreset-poisoning
+guard** (per-patient caps + embedding outlier veto).
+
+- **`StreamProcessor`** — runs the three Flink-style jobs and the guard.
+- **`SieveStreamingCoreset`** — a faithful single-pass streaming submodular
+  maximization (Badanidiyuru et al., 2014) under a facility-location objective.
+- The guard separates three concerns: **DQ filtering** (low SQI), **robust
+  poison veto** (per-feature median/MAD z-score), and **flood cap** — see the
+  three findings in `tests/test_synthetic_cohorts.py`.
+- **Streaming validation** of the guard runs incrementally in `streaming/`
+  using P²-quantile online statistics (see §6).
+
+Run/test: `python examples/run_demo.py`; `tests/test_synthetic_cohorts.py`
+asserts each cohort triggers its intended behaviour.
+
+### Layer 5 — Storage (multi-layered) · `layer5_storage/`
+Diagram features: **time-series (InfluxDB)**, **raw data lake (S3 + Delta +
+Object Lock)**, **feature store (Redis online / Feast)**, **metadata
+(PostgreSQL)**, DP release store, AES-256 (KMS), field-level PHI encryption.
+
+- **`TSDB`** — hot time-series store (InfluxDB stand-in), bounded hot window.
+- **`ObjectLake`** — append-only, SHA-256-anchored **WORM** raw lake (S3 Object
+  Lock stand-in; the 21 CFR Part 11 immutability anchor).
+- **`FeatureStore`** — online feature/coreset store (Redis stand-in).
+- **`MetadataStore`** — patient/device/run registry (PostgreSQL stand-in).
+- **`DPReleaseStore`** — differential-privacy release boundary (Gaussian
+  mechanism), debiting a budget ledger.
+- **`StorageLayer`** — facade that persists one `ProcessedBatch` across all five.
+
+Design rule (baked in): the raw firehose lands **only** in the cheap WORM lake;
+the TSDB holds a small hot window; only the coreset feeds training.
+
+Run/test: `python examples/run_layers_verbose.py` (see the `StorageReceipt`);
+`tests/test_smoke.py` (`test_worm_is_immutable`).
+
+### Layer 6 — MCP Security Gateway (Agent Access Enforcement Point) · `layer6_mcp_gateway/`
+Diagram features: HMCP server, **OAuth 2.1 + PKCE**, static tool registry (no
+dynamic discovery), RBAC tool proxy, **prompt firewall**, **PHI/PII output
+scrubber**, HMAC-SHA256 signing, MCP audit → SIEM, **HITL** for writes, DLP,
+rate limiting.
+
+- **`MCPGateway`** — the single-tenant enforcement point: OAuth check, static
+  tool allowlist, RBAC via IAM, prompt-injection firewall, PHI/PII scrub, HMAC
+  signing, and HITL gating on write tools.
+
+This layer secures the gateway *mechanism*. The **multi-tenant platform** that
+uses it (many hospitals, many ML projects, tiered access) is `mcp_platform/`
+(§5.10 and the full detail in the design doc's Section 9).
+
+Run/test: exercised in `run_layers_verbose.py`; the multi-tenant enforcement is
+tested in `tests/test_mcp_platform.py`.
+
+### Layer 7 — Batch ML training · `layer7_training/`
+Diagram features: coreset → Spark ETL → feature eng → DVC → PyTorch +
+GRAD-MATCH → MLflow → validation → Triton shadow → production, **DP-SGD**
+(membership-inference / reconstruction defense), signed artifacts + **SBOM**.
+
+- **`TrainingPipeline`** — pulls the coreset from Layer 5, runs ETL + feature
+  engineering, trains with **DP-SGD** (per-sample gradient clipping + calibrated
+  Gaussian noise, debiting the privacy ledger), applies a validation gate,
+  attaches an SBOM, HMAC-signs the artifact, and stages it (shadow/prod).
+
+Run/test: `python examples/run_demo.py` (see the `ModelArtifact`);
+`tests/test_smoke.py`.
+
+### Layer 8 — Governance & compliance · `layer8_governance/`
+Diagram features: HIPAA, 21 CFR Part 11 (SHA-256, Object Lock, e-signatures),
+IEC 62304 (digest pinning, SOUP list), **MITRE ATLAS** threat model, pen
+testing, incident response, vulnerability management.
+
+- **`GovernanceLayer`** — verifies the tamper-evident audit chain (21 CFR Part
+  11), checks the digest-pinned SOUP inventory (IEC 62304), confirms HIPAA
+  access controls were exercised, maps exercised defenses to MITRE ATLAS
+  techniques, reports remaining DP budget, and emits a `ComplianceReport`.
+
+Run/test: `python examples/run_demo.py` (see the controls PASS/FAIL list);
+`tests/test_smoke.py` (`test_audit_chain_tamper_evident`).
+
+### Cross-cutting · `crosscutting/`
+Diagram features: SIEM + anomaly detection, TLS/mTLS in transit, AES-256 at rest
+(KMS envelope), **IAM (SSO + MFA + RBAC/ABAC)**, workload identity
+(SPIFFE/SPIRE), secrets vault, DP privacy-budget ledger, observability.
+
+- **`IAM`** — SPIFFE-style workload identity + role→scope RBAC (Layers 2/6).
+  **`PrincipalRegistry`** adds ML-project principals `{tenants × scopes}` for
+  the multi-tenant platform. (SSO/MFA are the workforce-identity front of this
+  RBAC model; see the design doc §8.4.)
+- **`AuditLog`** — hash-chained, tamper-evident audit trail feeding the SIEM.
+- **`PrivacyBudgetLedger`** / **`TenantPrivacyLedger`** — global and
+  per-(principal × tenant) differential-privacy accounting.
+- **`Tracer`** — OpenTelemetry-style spans.
+
+### §5.10 — Agentic multi-tenant access platform · `mcp_platform/`
+See §6 below — this is the third architecture diagram, made runnable.
+
+---
+
+## 6. Agentic multi-tenant MCP platform (`mcp_platform/`)
+
+Turns the pipeline into a governed platform serving **multiple hospitals**
+(tenants) and **multiple ML-project consumers** (principals) through MCP.
+
+| Module | Role |
+|---|---|
+| `access.py` | Access-tier model (DP-aggregate / feature / raw) + static tool registry |
+| `gateway.py` | Enforcement middleware: authN → scope+tenant authZ → prompt firewall → HITL → PHI scrub → HMAC |
+| `handlers.py` | Tool implementations reading per-tenant Layer 5 stores |
+| `platform.py` | `MultiTenantPlatform` facade: isolated per-tenant stores, principals, tenant DP ledgers, one `call()` entry point |
+| `server.py` | **Optional** real MCP-SDK server (stdio) exposing the same tools |
+
+**Tiered access model** — most projects live permanently at the safest tier:
+
+| Tier | Tools | Agent receives |
+|---|---|---|
+| DP-aggregate (default) | `query_vitals_dp` | Noised aggregates only; no row-level PHI |
+| Feature / coreset | `get_feature_batch`, `get_coreset` | De-identified feature vectors, tenant-scoped |
+| Raw / PHI | `request_raw_access` | Nothing directly — a HITL approval ticket |
+| Write | `trigger_retraining` | HITL-gated write |
+| Admin/IAM | `grant_access`, `set_budget`, `list_principals` | Higher-privilege control surface |
+
+**What the gateway enforces** (all unit-tested): tenant **isolation**, **scope**
+tiers, **per-(project × tenant) DP budget** with independent exhaustion, **HITL**
+on writes, **prompt-injection firewall**, **PHI scrub + HMAC** on outputs, and a
+scope-gated **admin** surface.
+
+Run it:
+
+```bash
+python examples/run_mcp_platform.py
+```
+
+Programmatic use:
+
+```python
+from physio_pipeline.layer1_edge import load_cohort
+from physio_pipeline.mcp_platform import AccessTier, MultiTenantPlatform
+
+plat = MultiTenantPlatform(dp_default_epsilon=3.0)
+plat.populate_from_devices(load_cohort("data/synthetic"))     # fill per-tenant stores
+plat.register_project_at_tier("spiffe://ml/alpha", AccessTier.DP_AGGREGATE, {"H001"})
+
+out = plat.call("spiffe://ml/alpha", "Bearer tok", "query_vitals_dp",
+                tenant="H001", epsilon=0.5)
+print(out["result"])          # noised aggregate; signed; budget debited
+```
+
+**Real MCP server (optional).** With `pip install -e ".[mcp]"`:
+
+```bash
+# verify it works without needing an MCP client:
+python -m physio_pipeline.mcp_platform.server --selftest
+
+# run it for a real client (waits silently on stdio; Ctrl+C to stop):
+python -m physio_pipeline.mcp_platform.server
+```
+
+Supports both the current **mcp >= 2.0** SDK (`MCPServer`) and legacy 1.x
+(`FastMCP`). The `--selftest` flag builds the server, confirms the tools
+registered, and runs one governed call — use it to check your install without
+wiring up a client. An MCP client (an LLM agent / host) can then discover and call
+`query_vitals_dp`, `get_feature_batch`, and `request_raw_access`. The same
+gateway checks apply. (For a runnable reference without an OAuth server,
+principal/tenant are passed as tool arguments; in production they come from the
+validated OAuth 2.1 token.)
+
+---
+
+## 7. Synthetic data (batch and streaming)
+
+A **reproducible, labeled, multi-hospital** cohort generator. Seeded → two runs
+produce byte-identical files.
+
+```bash
+python data/generate_synthetic.py                      # defaults: 3 hospitals, 10 patients
+python data/generate_synthetic.py --hospitals 4 --per-cohort 3 --seconds 120
+```
+
+Writes `data/synthetic/<PID>.npz` (samples + metadata incl. `hospital_id`),
+`manifest.csv` (labels + expected behaviour), and `P001_preview.csv`.
+
+Five labeled cohorts exercise distinct layer behaviours:
+
+| cohort | HR (bpm) | exercises |
+|---|---|---|
+| `normal` | 55–95 | baseline; no alarms |
+| `tachycardia` | 130–170 | L4 → critical alarm |
+| `bradycardia` | 30–42 | L4 → critical alarm |
+| `signal_loss` | 60–80 (noisy) | low SQI → DQ gap + rate-alarm gating |
+| `poisoned` | 60–80 + fabricated window | L4 robust poison veto |
+
+**Streaming synthetic data.** The `streaming/` harness turns the cohort into a
+continuous, time-paced, multi-patient/multi-hospital feed with mid-stream
+events, backpressure, and true incremental (P²-quantile) online statistics:
+
+```bash
+python examples/run_streaming.py               # single-feed streaming demo
+python examples/run_streaming_multitenant.py   # multi-hospital interleaved feed + MCP
+python examples/run_streaming.py --speed 1     # real-time
+python examples/run_streaming.py --speed 0     # as fast as possible (tests)
+```
+
+---
+
+## 8. Examples and tests
+
+### Examples (`examples/`)
+
+| Command | Shows |
+|---|---|
+| `python examples/run_demo.py` | Standard batch run, L4–L8 summary |
+| `python examples/run_layers_verbose.py` | **Each layer's output**, L1→L8, step by step |
+| `python examples/run_with_synthetic_data.py` | Replays the labeled cohort with per-cohort assertions |
+| `python examples/run_streaming.py` | Continuous streaming simulation (backpressure, onset latency, online guard) |
+| `python examples/run_mcp_platform.py` | Agentic multi-tenant platform: tiers, isolation, DP budget, HITL, admin |
+| `python examples/run_streaming_multitenant.py` | Multi-hospital streaming + tenant-scoped MCP queries |
+
+### Tests (`tests/`) — run all with one command
+
+```bash
+python tests/run_all.py            # no pytest required
+# or, if you installed [dev]:
+pytest -q
+```
+
+| Suite | Covers |
+|---|---|
+| `test_smoke.py` | End-to-end run; WORM immutability; audit tamper-evidence; perimeter rejection; DP budget |
+| `test_synthetic_cohorts.py` | Each cohort's alarm behaviour; SQI alarm gating; poison veto; robust guard keeps rare pathology |
+| `test_streaming.py` | Determinism; P² accuracy; onset detection; backpressure drops; online poison veto |
+| `test_mcp_platform.py` | Tenant isolation; scope tiers; per-(project×tenant) DP budget; HITL; admin grants; PHI scrub; unknown tool/principal |
+
+---
+
+## 9. Feature coverage checklist
+
+Everything promised, mapped to where it lives and how to test it.
+
+| Feature (from the diagrams) | Where | Test |
+|---|---|---|
+| Edge gateway, Pan–Tompkins QRS, SQI, DWT, TPM attestation | `layer1_edge/edge.py` | `test_smoke`, `test_synthetic_cohorts` |
+| mTLS 1.3, identity-aware proxy, DLP | `layer2_perimeter/perimeter.py` (modeled) | `test_smoke` |
+| Network segmentation (PHI / ML / Admin zones) | `layer2_perimeter` (`zone`) + `crosscutting/iam.py` | `test_smoke` |
+| SSO + MFA + RBAC/ABAC | `crosscutting/iam.py` (RBAC; SSO/MFA = workforce front) | `test_mcp_platform` |
+| Apache Kafka, schema registry, mTLS auth, replay | `layer3_ingestion/ingestion.py` | `test_smoke` |
+| Apache Flink stream processing | `layer4_processing/processing.py` | `test_synthetic_cohorts` |
+| Sieve-streaming coreset (facility location) | `layer4_processing/processing.py::SieveStreamingCoreset` | `test_synthetic_cohorts` |
+| Data quality / validation | `layer4_processing` (DQ metrics) | `test_synthetic_cohorts` |
+| Sieve-streaming **validation** (online/incremental) | `streaming/online_guard.py`, `streaming/pquantile.py` | `test_streaming` |
+| InfluxDB (time-series) | `layer5_storage/storage.py::TSDB` | `test_smoke` |
+| Redis (feature store) | `layer5_storage/storage.py::FeatureStore` | `test_mcp_platform` |
+| PostgreSQL (metadata) | `layer5_storage/storage.py::MetadataStore` | `test_smoke` |
+| MCP Gateway implementation | `layer6_mcp_gateway/gateway.py` + `mcp_platform/gateway.py` | `test_mcp_platform` |
+| Batch pipeline preparation (DP-SGD, SBOM) | `layer7_training/training.py` | `test_smoke` |
+| Governance (21 CFR 11 / IEC 62304 / ATLAS) | `layer8_governance/governance.py` | `test_smoke` |
+| Agentic multi-tenant access platform | `mcp_platform/` | `test_mcp_platform` |
+| Synthetic data for streaming + examples | `data/`, `streaming/`, `examples/` | `test_streaming` |
+
+---
+
+## 10. Stub → production swap-in map
+
+| Layer / concern | In this repo | Production |
+|---|---|---|
+| Transport | in-process calls | mTLS 1.3 service mesh (Istio/Envoy) |
+| Ingestion | in-memory log | Amazon MSK / Confluent (Kafka) |
+| Stream compute | synchronous loop / `streaming` harness | Apache Flink |
+| Coreset | `SieveStreamingCoreset` (numpy) | same algorithm as a Flink operator over learned embeddings |
+| Time-series | bounded `deque` (`TSDB`) | InfluxDB / Timestream-for-InfluxDB / TimescaleDB |
+| Raw lake | dict + SHA-256 (`ObjectLake`) | S3 + Object Lock (compliance mode) + Delta |
+| Feature store | dict (`FeatureStore`) | Redis + Feast |
+| Metadata | dict (`MetadataStore`) | Aurora PostgreSQL |
+| DP release | Gaussian mechanism + basic composition | OpenDP/SmartNoise; Rényi-DP accounting |
+| DP-SGD | numpy logistic regression | PyTorch + Opacus |
+| Audit | hash-chained list | OpenSearch/Elastic + append-only Postgres, SIEM |
+| IAM | in-memory RBAC + principals | SPIRE (SVIDs) + OPA + OAuth 2.1 AS; SSO/MFA IdP |
+| MCP server | in-process gateway + `server.py` (mcp SDK, optional) | OAuth 2.1 resource server over Streamable HTTP |
+
+---
+
+## 11. Honest limitations
+
+- **Not validated / not a medical device**; no clinical validation, no real key
+  management, no formal verification — **unit tests only**.
+- **Synthetic signals**; the QRS detector, SQI, and DWT PRD are simplified.
+- **DP composition is basic** (sequential). Production should use Rényi-DP /
+  a moments accountant; the mechanism here demonstrates mechanics, not audited
+  guarantees. DP on the toy per-hospital cohorts is deliberately noisy (small n).
+- **Security controls are illustrative** (regex firewalls/scrubbers, stub token
+  verification); they show *where* each control sits, not production strength.
+- **mTLS, SSO/MFA, OPA, SPIFFE** are modeled in shape; wiring real IdP/mesh/OPA
+  is the production step in the swap-in map.
+- **Single-process, in-memory**; no real partitioning, backpressure durability,
+  or exactly-once semantics beyond what the streaming harness simulates.
+
+Each limitation is a clean seam: the production swap-in drops in behind the same
+contract.
+
+---
+
+## License
+
+MIT — see `LICENSE`. Not a medical device; see `DISCLAIMER.md` and §11.
